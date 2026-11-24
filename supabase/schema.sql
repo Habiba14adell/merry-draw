@@ -1,3 +1,4 @@
+-- Baseline schema for new databases. Apply the migrations after this file.
 begin;
 
 create schema merry_private;

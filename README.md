@@ -1,11 +1,11 @@
 # Merry Draw
 
-Merry Draw is a family Secret Santa site built with React, Vite, Tailwind CSS, React Router, and Supabase. Organizers manage exchanges and finalize a draw. Participants use a shared invitation and a personal joining code to register, then use their private access key to return to the same assignment.
+Merry Draw is a family Secret Santa site built with React, Vite, Tailwind CSS, React Router, and Supabase. The organizer generates the draw. Participants open a shared invitation and enter their personal passcode to see their assignment.
 
 ## Set up Supabase
 
 1. Create a Supabase project with the Data API enabled and the `public` schema exposed. Leave `merry_private` out of the exposed schemas.
-2. In the SQL Editor, run [supabase/schema.sql](supabase/schema.sql) once as the project database owner. The script creates the schema and API functions in a single transaction.
+2. In the SQL Editor, run [supabase/schema.sql](supabase/schema.sql) once for a new project, then run the [personal passcodes migration](supabase/migrations/202611240001_personal_passcodes.sql) as the project database owner. The migration uses `pgcrypto` in the Supabase `extensions` schema.
 3. Under **Authentication → Users**, create an email/password user for each organizer. Use the dashboard's option to create a confirmed user. Copy the user's ID and run this SQL, replacing the placeholder with that ID.
 
    ```sql
@@ -15,6 +15,8 @@ Merry Draw is a family Secret Santa site built with React, Vite, Tailwind CSS, R
 
 4. Disable public sign-ups and anonymous sign-ins in Auth settings. Participants use the invitation flow without Supabase Auth accounts. An authenticated user also needs an organizer allowlist entry to use the dashboard. [Supabase Auth settings](https://supabase.com/docs/guides/auth/general-configuration)
 5. Copy the project URL and its publishable key. These values are embedded in the frontend. Keep database passwords, secret keys, and service-role keys out of this repository and GitHub Pages variables.
+
+For an existing project, apply only the personal passcodes migration and coordinate it with the frontend deployment. It creates words for the existing roster and keeps invitation links and finalized assignments. The organizer needs to send everyone their new word because the migration retires the old joining codes and access keys.
 
 ## Run locally
 
@@ -31,10 +33,9 @@ Before running the dev server, copy `.env.example` to `.env.local` and fill in t
 ## Run an exchange
 
 1. Open **Organizer**, sign in, and create an exchange with its date, optional budget, and event details.
-2. Add the people taking part. Copy the shared invitation link. Open **Show joining codes** and send each code privately to its intended participant.
-3. Participants open the link and enter their joining code. They can save their private access key for use on another device. The browser remembers the key on the current device. The key is shown in the participant view and can be copied at any time. If the key is lost before the draw, the organizer can remove and re-add that participant to issue a new joining code. After the draw, access requires the original key.
-4. Refresh the roster. When at least two people have joined and every name is marked **Joined**, finalize the draw.
-5. Participants return through the invitation, select **Return to my draw**, and open their gift. The organizer can view the full draw and download an Excel workbook with participants, assignments, and activity. Keep the workbook private.
+2. Add everyone taking part. Copy the shared invitation link for the group and send each person their word privately. Before the draw, **Regenerate** replaces a participant’s passcode immediately. Adding a name that overlaps an existing word also replaces that word, and the organizer screen identifies anyone who needs an updated passcode.
+3. With at least two people on the roster, click **Generate Secret Santa**. Participants can enter their passcodes before the draw and check back once it is ready.
+4. Participants open the invitation, enter their word, and open their gift. They can use the same word on another device to see the same assignment. The organizer can view the full draw from the private dashboard.
 
 ## Database and access model
 
@@ -42,13 +43,16 @@ Before running the dev server, copy `.env.example` to `.env.local` and fill in t
 | --- | --- |
 | `merry_private.organizers` | Allowlist of authenticated organizer IDs |
 | `merry_private.exchanges` | Owner, event details, invitation UUID, and finalization timestamp |
-| `merry_private.participants` | Organizer-entered roster, single-use joining codes, hashed access tokens, and join timestamps |
+| `merry_private.participants` | Organizer-entered roster |
+| `merry_private.passcodes` | Exchange-scoped keyed hashes and encrypted active words |
+| `merry_private.passcode_keys` | Private hashing and encryption keys |
+| `merry_private.passcode_attempts` | Exchange-wide failed-attempt limits |
 | `merry_private.assignments` | Permanent giver and recipient pairs scoped to one exchange |
-| `merry_private.activity` | Timestamped exchange, roster, registration, and draw changes |
+| `merry_private.activity` | Timestamped exchange, roster, and draw changes |
 
-Every table has Row Level Security enabled. The browser roles have no schema access or direct table policies. Three narrowly granted RPCs run with a fixed search path. `merry_event` reads event information by invitation. `merry_participant` claims a roster slot or retrieves a single assignment using a 256-bit browser-generated secret. The database stores its SHA-256 digest. `merry_admin` checks the authenticated user's allowlist membership and exchange ownership.
+Every Merry Draw table has Row Level Security enabled. Browser roles access data through RPCs with a fixed search path. `merry_event` reads event information by invitation. `merry_participant` uses an exchange-scoped HMAC-SHA-256 lookup to return only the matching participant and recipient. `merry_admin` checks the authenticated user's allowlist membership and exchange ownership before decrypting the AES-256 copies used for the organizer’s passcode table.
 
-Roster writes, claims, and draws lock the same exchange row. Finalization samples random recipient permutations until there are no self-matches. It inserts all pairs and marks the exchange finalized in the same transaction. Unique constraints enforce one recipient and one giver per exchange, and foreign keys enforce membership.
+Passcode issuance excludes words that overlap pieces of a roster name and reserves retired hashes so previous words cannot become valid again in the same exchange. Single dictionary words have limited entropy. Five failed lookups within 30 minutes temporarily pause passcode checks for that invitation. Roster writes, passcode lookups, and draws lock the same exchange row. Finalization samples random recipient permutations until there are no self-matches, then inserts all pairs and finalizes the exchange in the same transaction. Unique constraints enforce one recipient and one giver per exchange, and foreign keys enforce membership.
 
 ## Deploy to GitHub Pages
 
@@ -60,6 +64,6 @@ Roster writes, claims, and draws lock the same exchange row. Finalization sample
 
 ## Verification
 
-`npm test` runs the real schema in an embedded PostgreSQL engine with Supabase roles and user IDs supplied by the test harness. It covers event creation and editing, role boundaries, roster changes, registration and retries, draw preconditions, one-to-one assignments, repeat-draw rejection, assignment recovery, and export contents.
+`npm test` runs the baseline schema and migration in embedded PostgreSQL with simulated Supabase roles. It checks migration of finalized assignments, duplicate hash rejection, invalid and retired passcodes, failed-attempt limits, repeat visits, one-to-one assignments, and private organizer access.
 
-After configuring a deployed Supabase project, run one disposable exchange through the browser with two participants in separate profiles. Check sign-in, invitation routing, roster refresh, gift reveal, private-key recovery, and workbook download.
+After configuring a deployed Supabase project, run a disposable exchange with two participants in separate browser profiles. Check organizer sign-in, the shared link, copying and regenerating words, gift reveal, and returning with the same passcode.

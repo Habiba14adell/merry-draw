@@ -41,8 +41,8 @@ function Home() {
       </div>
     </section>
     <section className="steps" aria-label="How Secret Santa works">
-      <article><span aria-hidden="true">◇</span><div><h2>Gather the family</h2><p>Open your invitation and enter your personal joining code.</p></div></article>
-      <article><span aria-hidden="true">✧</span><div><h2>Unwrap a name</h2><p>Once everyone joins, open your gift to see who you drew.</p></div></article>
+      <article><span aria-hidden="true">◇</span><div><h2>Gather the family</h2><p>Open your invitation and enter your personal passcode.</p></div></article>
+      <article><span aria-hidden="true">✧</span><div><h2>Unwrap a name</h2><p>After the organizer generates the draw, open your gift to see who you drew.</p></div></article>
       <article><span aria-hidden="true">♡</span><div><h2>Keep the secret</h2><p>Bring a thoughtful gift and save the surprise for Christmas.</p></div></article>
     </section>
   </>

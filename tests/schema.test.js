@@ -1,11 +1,11 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { PGlite } from '@electric-sql/pglite'
-import { workbookData } from '../src/export.js'
+import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 
-test('database enforces the complete exchange lifecycle and role boundaries', async t => {
-  const db = new PGlite()
+test('personal passcodes and permanent assignments enforce exchange privacy', async t => {
+  const db = new PGlite({ extensions: { pgcrypto } })
   t.after(() => db.close())
   await db.exec(`
     create role anon;
@@ -15,7 +15,8 @@ test('database enforces the complete exchange lifecycle and role boundaries', as
     create function auth.uid() returns uuid language sql stable as
       'select nullif(current_setting(''request.jwt.claim.sub'', true), '''')::uuid';
   `)
-  await db.exec(await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8'))
+  const apply = async file => db.exec(await readFile(new URL('../supabase/' + file, import.meta.url), 'utf8'))
+  await apply('schema.sql')
   const users = (await db.query('insert into auth.users values (default),(default),(default) returning id')).rows
   await db.query('insert into merry_private.organizers values ($1),($2)', [users[0].id, users[1].id])
   const login = async user => {
@@ -26,45 +27,89 @@ test('database enforces the complete exchange lifecycle and role boundaries', as
   const call = async (sql, args) => (await db.query('select ' + sql + ' as result', args)).rows[0].result
   const admin = (action, id = null, data = {}) => call('public.merry_admin($1,$2,$3)', [action, id, data])
   const event = invite => call('public.merry_event($1)', [invite])
-  const participant = (invite, token, code = null) => call('public.merry_participant($1,$2,$3)', [invite, token, code])
+  const participant = (invite, code) => call('public.merry_participant($1,$2)', [invite, code])
 
+  await login(users[0])
+  const details = { title: 'Family Christmas', event_date: '2026-12-25', budget: '$25', details: 'Meet at noon.' }
+  const legacy = await admin('create', null, { ...details, title: 'Last Christmas' })
+  const legacyTokens = ['a'.repeat(64), 'b'.repeat(64)]
+  for (const [index, name] of ['Alex', 'Blair'].entries()) {
+    const added = (await admin('add', legacy.id, { name })).participants.find(p => p.name === name)
+    await call('public.merry_participant($1,$2,$3)', [legacy.invite, legacyTokens[index], added.claim_code])
+  }
+  const legacyDraw = await admin('draw', legacy.id)
+
+  await db.exec('reset role')
+  await apply('migrations/202611240001_personal_passcodes.sql')
+  await login(users[0])
+  const migrated = await admin('details', legacy.id)
+  assert.deepEqual(migrated.assignments, legacyDraw.assignments)
+  assert.equal(migrated.exchange.drawn_at, legacyDraw.exchange.drawn_at)
   await login()
-  await assert.rejects(admin('list'), /permission denied/)
-  await assert.rejects(db.query('select * from merry_private.assignments'), /permission denied/)
+  for (const person of migrated.participants) {
+    assert.deepEqual(await participant(legacy.invite, person.passcode), {
+      status: 'ok', name: person.name, recipient: migrated.assignments.find(a => a.giver === person.name).recipient,
+    })
+  }
+
+  await login(users[0])
+  const { id, invite } = await admin('create', null, details)
+  assert.ok((await admin('list')).some(exchange => exchange.id === id))
+  assert.equal((await admin('update', id, { ...details, budget: '$30' })).exchange.budget, '$30')
+  await assert.rejects(admin('draw', id), /at least two/)
+  const initial = (await admin('add', id, { name: 'Alex' })).participants[0]
+  // If a newly added name matches an existing word, the word must be replaced.
+  const overlap = await admin('add', id, { name: initial.passcode })
+  const named = overlap.participants.find(p => p.name === initial.passcode)
+  assert.ok(overlap.participants.every(p => !p.passcode.includes(initial.passcode)))
+  assert.notEqual(overlap.participants.find(p => p.id === initial.id).passcode, initial.passcode)
+  await admin('remove', id, { participant_id: named.id })
+
+  for (const name of ['Blair', 'Casey', 'Drew', 'Rivér']) await admin('add', id, { name })
+  await assert.rejects(admin('add', id, { name: 'alex' }), /unique constraint/)
+  const roster = (await admin('details', id)).participants
+  assert.equal(new Set(roster.map(p => p.passcode)).size, roster.length)
+  assert.ok(roster.every(p => /^[A-Z]+$/.test(p.passcode) && !p.passcode.includes('RIVER')))
+  const refreshed = await admin('regenerate', id, { participant_id: initial.id })
+  const replacement = refreshed.participants.find(p => p.id === initial.id)
+  assert.notEqual(replacement.passcode, roster.find(p => p.id === initial.id).passcode)
+  assert.ok(!roster.some(p => p.passcode === replacement.passcode))
+  assert.deepEqual(refreshed.assignments, [])
+
+  await db.exec('reset role')
+  assert.equal(await call('merry_private.name_overlaps_word($1,$2)', [id, 'RIVER']), true)
+  assert.equal(await call('merry_private.name_overlaps_word($1,$2)', [id, 'RIVERBANK']), true)
+  await assert.rejects(db.query(`
+    insert into merry_private.passcodes (exchange_id, word_hash)
+    select exchange_id, word_hash from merry_private.passcodes where exchange_id = $1 limit 1
+  `, [id]), /passcodes_pkey/)
+  const protectedTables = (await db.query(`
+    select relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'merry_private' and c.relkind = 'r'
+  `)).rows
+  assert.equal(protectedTables.length, 8)
+  assert.ok(protectedTables.every(table => table.relrowsecurity))
 
   await login(users[2])
   await assert.rejects(admin('list'), /Organizer access required/)
-  await login(users[0])
-  const details = { title: 'Family Christmas', event_date: '2026-12-25', budget: '$25', details: 'Meet at noon.' }
-  const created = await admin('create', null, details)
-  const { id, invite } = created
-  assert.equal((await admin('list'))[0].id, id)
-  assert.equal((await admin('update', id, { ...details, budget: '$30' })).exchange.budget, '$30')
-  await assert.rejects(admin('draw', id), /at least two/)
-  const initial = await admin('add', id, { name: 'Temporary' })
-  await admin('remove', id, { participant_id: initial.participants[0].id })
-  for (const name of ['Alex', 'Blair', 'Casey', 'Drew']) await admin('add', id, { name })
-  await assert.rejects(admin('add', id, { name: 'alex' }), /unique constraint/)
-  const roster = (await admin('details', id)).participants
-  await assert.rejects(admin('draw', id), /Everyone must join/)
-
   await login(users[1])
   assert.deepEqual(await admin('list'), [])
   await assert.rejects(admin('details', id), /Exchange not found/)
   await assert.rejects(admin('draw', id), /Exchange not found/)
+  await assert.rejects(admin('regenerate', id, { participant_id: initial.id }), /Exchange not found/)
 
   await login()
+  await assert.rejects(admin('list'), /permission denied/)
+  for (const table of ['assignments', 'participants', 'passcodes', 'passcode_keys']) {
+    await assert.rejects(db.query('select * from merry_private.' + table), /permission denied/)
+  }
   const publicDetails = await event(invite)
   assert.deepEqual(Object.keys(publicDetails).sort(), ['budget', 'details', 'drawn_at', 'event_date', 'title'])
   assert.equal(await event(id), null)
-  const tokens = ['a', 'b', 'c', 'd'].map(letter => letter.repeat(64))
-  await assert.rejects(participant(invite, tokens[0], id), /joining code/)
-  for (const [index, person] of roster.entries()) {
-    assert.deepEqual(await participant(invite, tokens[index], person.claim_code), { name: person.name, recipient: null })
-  }
-  assert.deepEqual(await participant(invite, tokens[0], roster[0].claim_code), { name: roster[0].name, recipient: null })
-  await assert.rejects(participant(invite, 'e'.repeat(64), roster[0].claim_code), /already been used/)
-  await assert.rejects(participant(invite, 'invalid'), /Invalid private access key/)
+  assert.deepEqual(await participant(invite, 'bad-code1'), { status: 'invalid' })
+  assert.deepEqual(await participant(invite, initial.passcode), { status: 'invalid' })
+  assert.deepEqual(await participant(invite, roster.find(p => p.id === initial.id).passcode), { status: 'invalid' })
+  assert.deepEqual(await participant(invite, replacement.passcode), { status: 'ok', name: 'Alex', recipient: null })
 
   await login(users[0])
   const result = await admin('draw', id)
@@ -72,25 +117,24 @@ test('database enforces the complete exchange lifecycle and role boundaries', as
   assert.equal(new Set(result.assignments.map(a => a.giver)).size, roster.length)
   assert.equal(new Set(result.assignments.map(a => a.recipient)).size, roster.length)
   assert.ok(result.assignments.every(a => a.giver !== a.recipient))
-  assert.ok(result.participants.every(p => p.joined_at && !p.claim_code))
-  assert.equal(result.activity.filter(a => a.action === 'Participant joined').length, roster.length)
-  assert.equal(result.activity.filter(a => a.action === 'Draw finalized').length, 1)
   await assert.rejects(admin('draw', id), /already final/)
   await assert.rejects(admin('add', id, { name: 'Late' }), /already final/)
-  await assert.rejects(admin('remove', id, { participant_id: roster[0].id }), /already final/)
+  await assert.rejects(admin('remove', id, { participant_id: initial.id }), /already final/)
+  await assert.rejects(admin('regenerate', id, { participant_id: initial.id }), /already final/)
   assert.deepEqual((await admin('details', id)).assignments, result.assignments)
   const another = await admin('create', null, { ...details, title: 'Another Christmas' })
 
   await login()
-  await assert.rejects(participant(another.invite, tokens[0]), /not recognized/)
-  for (const [index, person] of roster.entries()) {
-    const expected = result.assignments.find(a => a.giver === person.name).recipient
-    assert.deepEqual(await participant(invite, tokens[index]), { name: person.name, recipient: expected })
+  assert.deepEqual(await participant(another.invite, replacement.passcode), { status: 'invalid' })
+  for (const person of refreshed.participants) {
+    const recipient = result.assignments.find(a => a.giver === person.name).recipient
+    const expected = { status: 'ok', name: person.name, recipient }
+    assert.deepEqual(await participant(invite, person.passcode), expected)
+    assert.deepEqual(await participant(invite, ' ' + person.passcode.toLowerCase() + ' '), expected)
   }
-  const sheets = workbookData(result)
-  assert.deepEqual(sheets.map(sheet => sheet.name), ['Participants', 'Assignments', 'Activity'])
-  assert.equal(sheets[0].rows.length, roster.length)
-  assert.deepEqual(sheets[1].rows, result.assignments.map(a => [a.giver, a.recipient]))
-  assert.equal(sheets[2].rows.length, result.activity.length)
-  assert.ok(!JSON.stringify(sheets).includes(roster[0].claim_code))
+  for (let i = 0; i < 3; i++) assert.deepEqual(await participant(invite, 'notaword'), { status: 'invalid' })
+  assert.deepEqual(await participant(invite, replacement.passcode), { status: 'limited' })
+  await db.exec("reset role; update merry_private.passcode_attempts set window_started = clock_timestamp() - interval '31 minutes'")
+  await login()
+  assert.equal((await participant(invite, replacement.passcode)).status, 'ok')
 })

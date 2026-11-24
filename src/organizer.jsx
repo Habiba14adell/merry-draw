@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { admin, supabase } from './api'
 import { eventDate } from './format'
-import { exportExchange } from './export'
 import { Notice } from './ui'
 
 export function Organizer() {
@@ -69,7 +68,6 @@ function Dashboard() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState(false)
   const [showAssignments, setShowAssignments] = useState(false)
-  const [showCodes, setShowCodes] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -97,7 +95,6 @@ function Dashboard() {
       setSnapshot(result)
       setCreating(false)
       setEditing(false)
-      setShowCodes(false)
       setShowAssignments(false)
     })
   }
@@ -112,6 +109,10 @@ function Dashboard() {
       } else {
         const updated = await admin(action, exchange.id, data)
         setSnapshot(updated)
+        if (action === 'regenerate') {
+          const participant = updated.participants.find(p => p.id === data.participant_id)
+          setMessage('Send the new passcode privately to ' + participant.name + '.')
+        }
         if (action === 'update') {
           setExchanges(list => list.map(item => item.id === exchange.id ? updated.exchange : item))
           setEditing(false)
@@ -129,7 +130,6 @@ function Dashboard() {
 
   if (!exchanges) return error ? <Notice>{error}</Notice> : <p role="status">Loading exchanges…</p>
   const invite = exchange ? new URL('#/join/' + exchange.invite, location.href).href : ''
-  const joined = snapshot?.participants.filter(p => p.joined_at).length
   const total = snapshot?.participants.length
 
   return <div className="dashboard">
@@ -161,44 +161,55 @@ function Dashboard() {
       </section>
 
       <section className="panel">
-        <div className="section-heading"><div><h2>Participants</h2><p>{joined} of {total} joined</p></div>
-          <button className="secondary" disabled={busy} onClick={() => mutate('details')}>Refresh</button></div>
+        <h2>Participants</h2>
         {!exchange.drawn_at && <form className="toolbar" onSubmit={event => {
           event.preventDefault()
           const form = event.currentTarget
           const name = new FormData(form).get('name')
-          run(async () => { setSnapshot(await admin('add', exchange.id, { name })); form.reset() })
+          run(async () => {
+            const updated = await admin('add', exchange.id, { name })
+            const previousCodes = new Map(snapshot.participants.map(p => [p.id, p.passcode]))
+            const changed = updated.participants.filter(p => previousCodes.has(p.id) && previousCodes.get(p.id) !== p.passcode)
+            setSnapshot(updated)
+            form.reset()
+            if (changed.length) setMessage('Send updated passcodes privately to ' + changed.map(p => p.name).join(', ') + '.')
+          })
         }}>
           <label>Participant name<input name="name" maxLength={100} required /></label><button className="primary" disabled={busy}>Add participant</button>
         </form>}
-        {!exchange.drawn_at && total > joined && <><p>Share the invitation link with everyone and send each joining code privately to its participant.</p>
-          <button className="text-button" onClick={() => setShowCodes(!showCodes)}>{showCodes ? 'Hide joining codes' : 'Show joining codes'}</button></>}
-        {total > 0 && <ul className="roster">{snapshot.participants.map(p => <li key={p.id}>
-          <div><strong>{p.name}</strong><span className={p.joined_at ? 'joined' : 'pending'}>{p.joined_at ? 'Joined' : 'Awaiting join'}</span></div>
-          <div className="row-actions">{showCodes && p.claim_code && <><code>{p.claim_code}</code><button className="text-button" disabled={busy} onClick={() => copy(p.claim_code, 'Joining code')}>Copy code</button></>}
-          {!exchange.drawn_at && <button className="text-button" aria-label={'Remove ' + p.name} disabled={busy} onClick={() => {
-            if (window.confirm('Remove ' + p.name + ' from this exchange?')) mutate('remove', { participant_id: p.id })
-          }}>Remove</button>}</div>
-        </li>)}</ul>}
+        {total > 0 && <>
+          <p>Share the invitation link with everyone and send each person their passcode privately.</p>
+          <table className="passcode-table">
+            <thead><tr><th scope="col">Participant</th><th scope="col">Passcode</th></tr></thead>
+            <tbody>{snapshot.participants.map(p => <tr key={p.id}>
+              <th scope="row">{p.name}</th>
+              <td><div className="row-actions">
+                <code>{p.passcode}</code>
+                <button className="text-button" aria-label={'Copy passcode for ' + p.name} disabled={busy} onClick={() => copy(p.passcode, 'Passcode')}>Copy</button>
+              </div>
+              {!exchange.drawn_at && <div className="row-actions">
+                <button className="text-button" aria-label={'Regenerate passcode for ' + p.name} disabled={busy} onClick={() => mutate('regenerate', { participant_id: p.id })}>Regenerate</button>
+                <button className="text-button" aria-label={'Remove ' + p.name} disabled={busy} onClick={() => {
+                  if (window.confirm('Remove ' + p.name + ' from this exchange?')) mutate('remove', { participant_id: p.id })
+                }}>Remove</button>
+              </div>}</td>
+            </tr>)}</tbody>
+          </table>
+        </>}
       </section>
 
       <section className="panel">
-        <div className="section-heading"><h2>Secret Santa draw</h2><button className="secondary" disabled={busy} onClick={() => run(async () => {
-          const current = await admin('details', exchange.id)
-          setSnapshot(current)
-          await exportExchange(current)
-          setMessage('Excel workbook downloaded.')
-        })}>Export Excel</button></div>
+        <h2>Secret Santa draw</h2>
         {exchange.drawn_at ? <>
           <p>Finalized {new Date(exchange.drawn_at).toLocaleString()}</p>
           <button className="secondary" onClick={() => setShowAssignments(!showAssignments)}>{showAssignments ? 'Hide assignments' : 'View private assignments'}</button>
           {showAssignments && <table><thead><tr><th scope="col">Giver</th><th scope="col">Recipient</th></tr></thead><tbody>
             {snapshot.assignments.map(a => <tr key={a.giver}><td>{a.giver}</td><td>{a.recipient}</td></tr>)}</tbody></table>}
         </> : <>
-          <p>At least two participants are required. Everyone must join before you can finalize the draw.</p>
-          <button className="primary" disabled={busy || total < 2 || joined !== total} onClick={() => {
+          <p>Add at least two participants before generating the draw.</p>
+          <button className="primary" disabled={busy || total < 2} onClick={() => {
             if (window.confirm('Finalize the Secret Santa draw? Assignments are permanent.')) mutate('draw')
-          }}>Finalize draw</button>
+          }}>Generate Secret Santa</button>
         </>}
       </section>
       <section className="panel"><h2>Activity</h2><ul className="activity">{snapshot.activity.map((entry, index) => <li key={index}>

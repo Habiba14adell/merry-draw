@@ -112,26 +112,24 @@ select { appearance: none; padding-right: 2rem; background-image: url("data:imag
 .event-details { white-space: pre-wrap; overflow-wrap: anywhere; }
 .participant-content { border-top: 1px solid var(--line); margin-top: 1.3rem; padding-top: 1.3rem; }
 .participant-content > button { margin-top: .85rem; }
-.toggle, .row-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
-.toggle button { border: 1px solid var(--line); border-radius: .55rem; padding: .5rem .75rem; }
-.toggle button[aria-pressed=true] { background: #d4b87822; border-color: #d4b87870; }
+.row-actions { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; }
 .recipient { text-align: center; padding: .5rem; animation: reveal .45s .42s both; }
 .recipient h2 { font-size: clamp(2rem, 7vw, 3.5rem); color: #f1d899; }
-.key-area { display: grid; gap: .55rem; justify-items: start; margin-top: 1.4rem; }
-.key-area input { font-family: monospace; }
+.participant-content > .text-button { margin-top: 1rem; }
 .dashboard-head, .section-heading { display: flex; flex-wrap: wrap; gap: .9rem; align-items: center; justify-content: space-between; }
 .dashboard-head { margin: 2rem 0 1rem; }
 .dashboard { display: grid; gap: 1rem; margin-bottom: 3rem; }
 .toolbar, .form-grid { display: grid; gap: .7rem; align-items: end; }
 .toolbar > button { justify-self: start; }
 .toolbar.invitation { margin-top: 1rem; }
-.roster, .activity, table { margin-top: 1rem; }
-.roster li, .activity li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem 1rem; border-top: 1px solid var(--line); padding: .7rem 0; overflow-wrap: anywhere; }
-.roster strong { margin-right: .7rem; }
-.joined { color: #bee8c4; }
-.pending, .activity time { color: var(--muted); }
+.activity, table { margin-top: 1rem; }
+.activity li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem 1rem; border-top: 1px solid var(--line); padding: .7rem 0; overflow-wrap: anywhere; }
+.activity time { color: var(--muted); }
 .row-actions code { max-width: 100%; overflow-wrap: anywhere; }
 table { width: 100%; text-align: left; }
+.passcode-table { table-layout: fixed; }
+.passcode-table thead th:first-child { width: 40%; }
+.passcode-table tbody th, .passcode-table td { vertical-align: top; overflow-wrap: anywhere; }
 td, th { border-bottom: 1px solid var(--line); padding: .55rem .4rem; overflow-wrap: anywhere; }
 .panel > .secondary, .panel > .primary, .panel > .text-button { margin-top: .85rem; }
 
