@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { rpc } from './api'
 import { eventDate, uuidPattern } from './format'
@@ -17,6 +17,13 @@ function Invitation({ invite }) {
   const [person, setPerson] = useState(null)
   const [busy, setBusy] = useState(false)
   const [opened, setOpened] = useState(false)
+  const giftButton = useRef(null)
+
+  function openGift() {
+    if (opened) return
+    giftButton.current?.focus()
+    setOpened(true)
+  }
 
   useEffect(() => {
     let active = true
@@ -64,11 +71,14 @@ function Invitation({ invite }) {
       {event.details && <p className="event-details">{event.details}</p>}
       <div className="participant-content">
         {person && <h2>Hello, {person.name}</h2>}
-        {person?.recipient ? <>
-          <Gift open={opened} />
+        {person?.recipient ? <div className="gift-reveal">
+          <button ref={giftButton} className="gift-trigger" type="button"
+            aria-label={opened ? 'Gift opened' : 'Unwrap your gift'} aria-disabled={opened} onClick={openGift}>
+            <Gift open={opened} />
+          </button>
           <div aria-live="polite">{opened && <div className="recipient"><p>You’re Secret Santa for</p><h2>{person.recipient}</h2></div>}</div>
-          {!opened && <button className="primary" onClick={() => setOpened(true)}>Open my gift</button>}
-        </> : <form onSubmit={access}>
+          {!opened && <button className="primary" type="button" onClick={openGift}>Open my gift</button>}
+        </div> : <form onSubmit={access}>
           {person ? <p>The draw is still waiting for your organizer. Check back soon!</p> :
             <label>Personal passcode<input name="passcode" type="password" required maxLength={32} autoComplete="off"
               autoCapitalize="none" spellCheck={false} value={passcode}
