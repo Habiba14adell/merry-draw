@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 
-test('personal passcodes and permanent assignments enforce exchange privacy', async t => {
+test('personal passcodes, draws and reassignments enforce exchange privacy', async t => {
   const db = new PGlite({ extensions: { pgcrypto } })
   t.after(() => db.close())
   await db.exec(`
@@ -41,10 +41,12 @@ test('personal passcodes and permanent assignments enforce exchange privacy', as
 
   await db.exec('reset role')
   await apply('migrations/202611240001_personal_passcodes.sql')
+  await apply('migrations/202611250001_prevent_reciprocal_draws.sql')
   await login(users[0])
   const migrated = await admin('details', legacy.id)
   assert.deepEqual(migrated.assignments, legacyDraw.assignments)
   assert.equal(migrated.exchange.drawn_at, legacyDraw.exchange.drawn_at)
+  await assert.rejects(admin('reassign', legacy.id), /at least three/)
   await login()
   for (const person of migrated.participants) {
     assert.deepEqual(await participant(legacy.invite, person.passcode), {
@@ -56,10 +58,12 @@ test('personal passcodes and permanent assignments enforce exchange privacy', as
   const { id, invite } = await admin('create', null, details)
   assert.ok((await admin('list')).some(exchange => exchange.id === id))
   assert.equal((await admin('update', id, { ...details, budget: '$30' })).exchange.budget, '$30')
-  await assert.rejects(admin('draw', id), /at least two/)
+  await assert.rejects(admin('draw', id), /at least three/)
+  await assert.rejects(admin('reassign', id), /Generate the draw before reassigning/)
   const initial = (await admin('add', id, { name: 'Alex' })).participants[0]
   // If a newly added name matches an existing word, the word must be replaced.
   const overlap = await admin('add', id, { name: initial.passcode })
+  await assert.rejects(admin('draw', id), /at least three/)
   const named = overlap.participants.find(p => p.name === initial.passcode)
   assert.ok(overlap.participants.every(p => !p.passcode.includes(initial.passcode)))
   assert.notEqual(overlap.participants.find(p => p.id === initial.id).passcode, initial.passcode)
@@ -96,6 +100,7 @@ test('personal passcodes and permanent assignments enforce exchange privacy', as
   assert.deepEqual(await admin('list'), [])
   await assert.rejects(admin('details', id), /Exchange not found/)
   await assert.rejects(admin('draw', id), /Exchange not found/)
+  await assert.rejects(admin('reassign', id), /Exchange not found/)
   await assert.rejects(admin('regenerate', id, { participant_id: initial.id }), /Exchange not found/)
 
   await login()
@@ -117,6 +122,9 @@ test('personal passcodes and permanent assignments enforce exchange privacy', as
   assert.equal(new Set(result.assignments.map(a => a.giver)).size, roster.length)
   assert.equal(new Set(result.assignments.map(a => a.recipient)).size, roster.length)
   assert.ok(result.assignments.every(a => a.giver !== a.recipient))
+  assert.ok(result.assignments.every(a => !result.assignments.some(
+    other => a.giver === other.recipient && a.recipient === other.giver,
+  )))
   await assert.rejects(admin('draw', id), /already final/)
   await assert.rejects(admin('add', id, { name: 'Late' }), /already final/)
   await assert.rejects(admin('remove', id, { participant_id: initial.id }), /already final/)
@@ -137,4 +145,21 @@ test('personal passcodes and permanent assignments enforce exchange privacy', as
   await db.exec("reset role; update merry_private.passcode_attempts set window_started = clock_timestamp() - interval '31 minutes'")
   await login()
   assert.equal((await participant(invite, replacement.passcode)).status, 'ok')
+
+  await assert.rejects(admin('reassign', id), /permission denied/)
+  await login(users[0])
+  const reassigned = await admin('reassign', id)
+  assert.notDeepEqual(reassigned.assignments, result.assignments)
+  assert.deepEqual(reassigned.participants, result.participants)
+  assert.equal(reassigned.exchange.invite, invite)
+  assert.equal(reassigned.assignments.length, roster.length)
+  assert.equal(new Set(reassigned.assignments.map(a => a.recipient)).size, roster.length)
+  assert.ok(reassigned.assignments.every(a => !reassigned.assignments.some(
+    other => a.giver === other.recipient && a.recipient === other.giver,
+  )))
+  await login()
+  for (const person of reassigned.participants) {
+    const expected = reassigned.assignments.find(a => a.giver === person.name).recipient
+    assert.deepEqual(await participant(invite, person.passcode), { status: 'ok', name: person.name, recipient: expected })
+  }
 })

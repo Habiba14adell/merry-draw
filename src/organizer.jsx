@@ -113,6 +113,7 @@ function Dashboard() {
           const participant = updated.participants.find(p => p.id === data.participant_id)
           setMessage('Send the new passcode privately to ' + participant.name + '.')
         }
+        if (action === 'reassign') setMessage('Draw reassigned. Ask participants to check their gift again.')
         if (action === 'update') {
           setExchanges(list => list.map(item => item.id === exchange.id ? updated.exchange : item))
           setEditing(false)
@@ -202,13 +203,18 @@ function Dashboard() {
         <h2>Secret Santa draw</h2>
         {exchange.drawn_at ? <>
           <p>Finalized {new Date(exchange.drawn_at).toLocaleString()}</p>
-          <button className="secondary" onClick={() => setShowAssignments(!showAssignments)}>{showAssignments ? 'Hide assignments' : 'View private assignments'}</button>
+          <div className="row-actions">
+            <button className="secondary" onClick={() => setShowAssignments(!showAssignments)}>{showAssignments ? 'Hide assignments' : 'View private assignments'}</button>
+            {total >= 3 && <button className="secondary" disabled={busy} onClick={() => {
+              if (window.confirm('Replace the current assignments? Anyone who already opened a gift should check their result again.')) mutate('reassign')
+            }}>Reassign draw</button>}
+          </div>
           {showAssignments && <table><thead><tr><th scope="col">Giver</th><th scope="col">Recipient</th></tr></thead><tbody>
             {snapshot.assignments.map(a => <tr key={a.giver}><td>{a.giver}</td><td>{a.recipient}</td></tr>)}</tbody></table>}
         </> : <>
-          <p>Add at least two participants before generating the draw.</p>
-          <button className="primary" disabled={busy || total < 2} onClick={() => {
-            if (window.confirm('Finalize the Secret Santa draw? Assignments are permanent.')) mutate('draw')
+          <p>Add at least three participants. The draw avoids self-matches and two-way gift swaps.</p>
+          <button className="primary" disabled={busy || total < 3} onClick={() => {
+            if (window.confirm('Generate the Secret Santa draw and make assignments available to participants?')) mutate('draw')
           }}>Generate Secret Santa</button>
         </>}
       </section>
