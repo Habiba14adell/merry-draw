@@ -22,9 +22,8 @@ function Home() {
   return <>
     <section className="hero">
       <div className="hero-copy">
-        <p className="eyebrow"><span /> A family Christmas tradition</p>
         <h1>Secret Santa,<br /><em>made merry.</em></h1>
-        <p className="lede">One little gift. One big surprise. Get the whole family together for a Christmas exchange with a little extra magic.</p>
+        <p className="lede">Join a Christmas gift exchange and find out who you drew.</p>
         <button className="primary" onClick={() => setJoining(true)}>Join Secret Santa</button>
         {joining && <form className="join-inline" onSubmit={openInvite}>
           <label>Invitation link<input autoFocus required value={invite} onChange={e => setInvite(e.target.value)} /></label>
@@ -41,7 +40,7 @@ function Home() {
       </div>
     </section>
     <section className="steps" aria-label="How Secret Santa works">
-      <article><span aria-hidden="true">◇</span><div><h2>Gather the family</h2><p>Open your invitation and enter your personal passcode.</p></div></article>
+      <article><span aria-hidden="true">◇</span><div><h2>Join the exchange</h2><p>Open your invitation and enter your personal passcode.</p></div></article>
       <article><span aria-hidden="true">✧</span><div><h2>Unwrap a name</h2><p>After the organizer generates the draw, open your gift to see who you drew.</p></div></article>
       <article><span aria-hidden="true">♡</span><div><h2>Keep the secret</h2><p>Bring a thoughtful gift and save the surprise for Christmas.</p></div></article>
     </section>
@@ -60,14 +59,14 @@ function App() {
   return <HashRouter>
     <Snow />
     <div className="site">
-      <header><Link className="brand" to="/"><span aria-hidden="true">✳</span> Merry Draw</Link><Link className="nav-link" to="/organizer">Organizer</Link></header>
+      <header><Link className="brand" to="/"><span aria-hidden="true">✳</span> Secret Santa</Link><Link className="nav-link" to="/organizer">Organizer</Link></header>
       <main><Suspense fallback={<p role="status">Loading…</p>}><Routes>
         <Route path="/" element={<Home />} />
         <Route path="/join/:invite" element={<Participant />} />
         <Route path="/organizer" element={<Organizer />} />
-        <Route path="*" element={<section className="panel narrow"><h1>Page not found</h1><Link to="/">Back to Merry Draw</Link></section>} />
+        <Route path="*" element={<section className="panel narrow"><h1>Page not found</h1><Link to="/">Back to Secret Santa</Link></section>} />
       </Routes></Suspense></main>
-      <footer><span aria-hidden="true">✧</span> Merry Draw · Family Secret Santa</footer>
+      <footer><span aria-hidden="true">✧</span> Secret Santa</footer>
     </div>
   </HashRouter>
 }

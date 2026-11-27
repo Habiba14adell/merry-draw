@@ -11,13 +11,18 @@ test('personal passcodes, draws and reassignments enforce exchange privacy', asy
     create role anon;
     create role authenticated;
     create schema auth;
-    create table auth.users(id uuid primary key default gen_random_uuid());
+    create table auth.users(
+      id uuid primary key default gen_random_uuid(),
+      email_confirmed_at timestamptz,
+      raw_app_meta_data jsonb,
+      raw_user_meta_data jsonb
+    );
     create function auth.uid() returns uuid language sql stable as
       'select nullif(current_setting(''request.jwt.claim.sub'', true), '''')::uuid';
   `)
   const apply = async file => db.exec(await readFile(new URL('../supabase/' + file, import.meta.url), 'utf8'))
   await apply('schema.sql')
-  const users = (await db.query('insert into auth.users values (default),(default),(default) returning id')).rows
+  const users = (await db.query('insert into auth.users (id) values (default),(default),(default) returning id')).rows
   await db.query('insert into merry_private.organizers values ($1),($2)', [users[0].id, users[1].id])
   const login = async user => {
     await db.exec('reset role')
@@ -30,7 +35,7 @@ test('personal passcodes, draws and reassignments enforce exchange privacy', asy
   const participant = (invite, code) => call('public.merry_participant($1,$2)', [invite, code])
 
   await login(users[0])
-  const details = { title: 'Family Christmas', event_date: '2026-12-25', budget: '$25', details: 'Meet at noon.' }
+  const details = { title: 'Christmas Exchange', event_date: '2026-12-25', budget: '$25', details: 'Meet at noon.' }
   const legacy = await admin('create', null, { ...details, title: 'Last Christmas' })
   const legacyTokens = ['a'.repeat(64), 'b'.repeat(64)]
   for (const [index, name] of ['Alex', 'Blair'].entries()) {
@@ -42,6 +47,21 @@ test('personal passcodes, draws and reassignments enforce exchange privacy', asy
   await db.exec('reset role')
   await apply('migrations/202611240001_personal_passcodes.sql')
   await apply('migrations/202611250001_prevent_reciprocal_draws.sql')
+  await apply('migrations/202611270001_organizer_signup.sql')
+  await apply('migrations/202611270002_delete_exchange.sql')
+  await apply('migrations/202611270003_refresh_draw_reassignment.sql')
+  await apply('migrations/202611270004_track_passcode_entry.sql')
+  const signup = (await db.query(`
+    insert into auth.users (raw_app_meta_data, raw_user_meta_data)
+    values ('{"provider":"email"}', '{"merry_draw_organizer":true}') returning id
+  `)).rows[0]
+  await login(signup)
+  await assert.rejects(admin('list'), /Organizer access required/)
+  await db.exec('reset role')
+  await db.query('update auth.users set email_confirmed_at = now() where id = $1', [signup.id])
+  await login(signup)
+  assert.deepEqual(await admin('list'), [])
+  await assert.rejects(admin('details', legacy.id), /Exchange not found/)
   await login(users[0])
   const migrated = await admin('details', legacy.id)
   assert.deepEqual(migrated.assignments, legacyDraw.assignments)
@@ -118,6 +138,9 @@ test('personal passcodes, draws and reassignments enforce exchange privacy', asy
 
   await login(users[0])
   const result = await admin('draw', id)
+  const firstEntry = result.participants.find(p => p.id === initial.id).first_passcode_entry_at
+  assert.ok(Number.isFinite(Date.parse(firstEntry)))
+  assert.ok(result.participants.filter(p => p.id !== initial.id).every(p => p.first_passcode_entry_at === null))
   assert.equal(result.assignments.length, roster.length)
   assert.equal(new Set(result.assignments.map(a => a.giver)).size, roster.length)
   assert.equal(new Set(result.assignments.map(a => a.recipient)).size, roster.length)
@@ -148,9 +171,12 @@ test('personal passcodes, draws and reassignments enforce exchange privacy', asy
 
   await assert.rejects(admin('reassign', id), /permission denied/)
   await login(users[0])
+  const participantsBeforeReassign = (await admin('details', id)).participants
+  assert.ok(participantsBeforeReassign.every(p => p.first_passcode_entry_at))
+  assert.equal(participantsBeforeReassign.find(p => p.id === initial.id).first_passcode_entry_at, firstEntry)
   const reassigned = await admin('reassign', id)
   assert.notDeepEqual(reassigned.assignments, result.assignments)
-  assert.deepEqual(reassigned.participants, result.participants)
+  assert.deepEqual(reassigned.participants, participantsBeforeReassign)
   assert.equal(reassigned.exchange.invite, invite)
   assert.equal(reassigned.assignments.length, roster.length)
   assert.equal(new Set(reassigned.assignments.map(a => a.recipient)).size, roster.length)
@@ -162,4 +188,15 @@ test('personal passcodes, draws and reassignments enforce exchange privacy', asy
     const expected = reassigned.assignments.find(a => a.giver === person.name).recipient
     assert.deepEqual(await participant(invite, person.passcode), { status: 'ok', name: person.name, recipient: expected })
   }
+  const deleteExchange = () => call('public.merry_delete_exchange($1)', [id])
+  await assert.rejects(deleteExchange(), /permission denied/)
+  await login(users[1])
+  await assert.rejects(deleteExchange(), /Exchange not found/)
+  await login(users[0])
+  const beforeDelete = await admin('list')
+  await deleteExchange()
+  assert.deepEqual(await admin('list'), beforeDelete.filter(exchange => exchange.id !== id))
+  await login()
+  assert.equal(await event(invite), null)
+  assert.deepEqual(await participant(invite, replacement.passcode), { status: 'invalid' })
 })

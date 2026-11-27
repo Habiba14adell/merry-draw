@@ -137,6 +137,8 @@ table { width: 100%; text-align: left; }
 .passcode-table { table-layout: fixed; }
 .passcode-table thead th:first-child { width: 40%; }
 .passcode-table tbody th, .passcode-table td { vertical-align: top; overflow-wrap: anywhere; }
+.passcode-status, .passcode-status time { display: block; }
+.passcode-status { margin-top: .25rem; font-weight: 400; }
 td, th { border-bottom: 1px solid var(--line); padding: .55rem .4rem; overflow-wrap: anywhere; }
 .panel > .secondary, .panel > .primary, .panel > .text-button { margin-top: .85rem; }
 
